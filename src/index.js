@@ -48,21 +48,24 @@ export default {
         });
 
         return json({ ok: true, webhook: result });
-      } catch {
+      } catch (error) {
+        console.error("Webhook setup failed:", String(error?.message || "Unknown error"));
         return json({ error: "Unable to configure Telegram webhook" }, 502);
       }
     }
 
     // Receive Telegram updates
     if (request.method === "POST" && url.pathname === "/telegram") {
-      if (
-        !env.TELEGRAM_BOT_TOKEN ||
-        !env.TELEGRAM_WEBHOOK_SECRET ||
-        !env.BRAIN_API_SECRET ||
-        !env.TEST_STATE ||
-        !env.TEST_OWNER_TELEGRAM_ID
-      ) {
-        console.error("Telegram configuration is incomplete");
+      const missing = [];
+
+      if (!env.TELEGRAM_BOT_TOKEN) missing.push("TELEGRAM_BOT_TOKEN");
+      if (!env.TELEGRAM_WEBHOOK_SECRET) missing.push("TELEGRAM_WEBHOOK_SECRET");
+      if (!env.BRAIN_API_SECRET) missing.push("BRAIN_API_SECRET");
+      if (!env.TEST_STATE) missing.push("TEST_STATE");
+      if (!env.TEST_OWNER_TELEGRAM_ID) missing.push("TEST_OWNER_TELEGRAM_ID");
+
+      if (missing.length) {
+        console.error("Missing Worker configuration:", missing.join(", "));
         return json({ error: "Worker configuration is incomplete" }, 503);
       }
 
@@ -70,6 +73,7 @@ export default {
         request.headers.get("X-Telegram-Bot-Api-Secret-Token") !==
         env.TELEGRAM_WEBHOOK_SECRET
       ) {
+        console.error("Telegram webhook secret validation failed");
         return json({ error: "Unauthorized" }, 401);
       }
 
@@ -90,6 +94,7 @@ export default {
         );
       }
 
+      // Prevent Telegram from repeatedly retrying handled updates.
       return json({ ok: true });
     }
 
@@ -107,10 +112,10 @@ async function telegram(env, method, payload) {
     }
   );
 
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
 
   if (!response.ok || !data.ok) {
-    throw new Error(`Telegram ${method} failed`);
+    throw new Error(`Telegram ${method} failed with HTTP ${response.status}`);
   }
 
   return data.result;
@@ -136,6 +141,7 @@ async function callBrain(env, path, body) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok || data.ok !== true) {
+    console.error("Brain API failed:", path, "HTTP", response.status);
     throw new Error(`Brain API request failed: ${response.status}`);
   }
 
@@ -167,8 +173,11 @@ async function handleUpdate(update, env) {
 
   const telegramId = String(message.from.id);
 
-  // Only the configured test owner may use this bot.
-  if (telegramId !== String(env.TEST_OWNER_TELEGRAM_ID)) return;
+  // Restrict this test bot to the configured owner.
+  if (telegramId !== String(env.TEST_OWNER_TELEGRAM_ID)) {
+    console.warn("Ignored message from an unconfigured Telegram user");
+    return;
+  }
 
   const chatId = message.chat.id;
   const text = message.text.trim();
@@ -204,7 +213,12 @@ async function handleUpdate(update, env) {
         chatId,
         "Retention consent is now disabled. The bot will not process further messages until you consent again. Previously stored data has not been deleted."
       );
-    } catch {
+    } catch (error) {
+      console.error(
+        "Consent withdrawal failed:",
+        String(error?.message || "Unknown error")
+      );
+
       await sendText(
         env,
         chatId,
@@ -215,6 +229,8 @@ async function handleUpdate(update, env) {
   }
 
   if (command === "/consent") {
+    let stage = "onboarding";
+
     try {
       const result = await callBrain(env, "/onboarding", {
         userId,
@@ -223,8 +239,10 @@ async function handleUpdate(update, env) {
       });
 
       if (!result.conversationId) {
-        throw new Error("Conversation was not created");
+        throw new Error("Conversation ID missing from Brain response");
       }
+
+      stage = "kv_write";
 
       await env.TEST_STATE.put(
         stateKey(telegramId),
@@ -234,17 +252,33 @@ async function handleUpdate(update, env) {
         })
       );
 
+      stage = "telegram_reply";
+
       await sendText(
         env,
         chatId,
         "Consent saved. AI-training consent is NO. History and long-term memory are still disabled. You can now send me a message."
       );
-    } catch {
-      await sendText(
-        env,
-        chatId,
-        "I couldn't finish setup. Please try /consent again later."
+    } catch (error) {
+      console.error(
+        "Consent setup failed at:",
+        stage,
+        "Error:",
+        String(error?.message || "Unknown error")
       );
+
+      try {
+        await sendText(
+          env,
+          chatId,
+          `Setup failed at ${stage}. Please check the test Worker's logs.`
+        );
+      } catch (sendError) {
+        console.error(
+          "Could not send consent error message:",
+          String(sendError?.message || "Unknown error")
+        );
+      }
     }
     return;
   }
@@ -281,7 +315,12 @@ async function handleUpdate(update, env) {
     }
 
     await sendText(env, chatId, result.reply);
-  } catch {
+  } catch (error) {
+    console.error(
+      "Brain reply failed:",
+      String(error?.message || "Unknown error")
+    );
+
     await sendText(
       env,
       chatId,
