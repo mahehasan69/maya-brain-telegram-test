@@ -148,7 +148,7 @@ async function handleUpdate(update, env) {
       headers: {
         "Authorization": `Bearer ${env.BRAIN_API_SECRET}`,
         "Content-Type": "application/json"
-      },
+      }, 
       body: JSON.stringify({
         userId,
         conversationId,
