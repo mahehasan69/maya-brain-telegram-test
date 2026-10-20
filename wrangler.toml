@@ -1,4 +1,4 @@
 
 name = "maya-brain-telegram-test"
 main = "src/index.js"
-compatibility_date = "2026-10-21"
+compatibility_date = "2026-10-20"
