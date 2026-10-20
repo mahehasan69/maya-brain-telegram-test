@@ -1,5 +1,5 @@
 
-const BRAIN_URL = "https://maya-brain-v1.mahehasan69.workers.dev";
+const BRAIN_URL = "https://maya-brain-v1.mahehassan69.workers.dev";
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -14,7 +14,11 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (request.method === "GET" && url.pathname === "/") {
+    // Health check
+    if (
+      request.method === "GET" &&
+      (url.pathname === "/" || url.pathname === "/health")
+    ) {
       return json({
         ok: true,
         service: "maya-brain-telegram-test",
@@ -22,6 +26,7 @@ export default {
       });
     }
 
+    // Configure Telegram webhook
     if (request.method === "POST" && url.pathname === "/setup") {
       if (
         !env.WEBHOOK_SETUP_KEY ||
@@ -48,6 +53,7 @@ export default {
       }
     }
 
+    // Receive Telegram updates
     if (request.method === "POST" && url.pathname === "/telegram") {
       if (
         !env.TELEGRAM_BOT_TOKEN ||
@@ -56,6 +62,7 @@ export default {
         !env.TEST_STATE ||
         !env.TEST_OWNER_TELEGRAM_ID
       ) {
+        console.error("Telegram configuration is incomplete");
         return json({ error: "Worker configuration is incomplete" }, 503);
       }
 
@@ -67,6 +74,7 @@ export default {
       }
 
       let update;
+
       try {
         update = await request.json();
       } catch {
@@ -76,11 +84,12 @@ export default {
       try {
         await handleUpdate(update, env);
       } catch (error) {
-        // Do not log tokens, secrets, message content, or personal data.
-        console.error("Telegram update handling failed:", String(error));
+        console.error(
+          "Telegram update handling failed:",
+          String(error?.message || "Unknown error")
+        );
       }
 
-      // Return success to Telegram to avoid endless webhook retries.
       return json({ ok: true });
     }
 
@@ -118,7 +127,7 @@ async function callBrain(env, path, body) {
   const response = await fetch(`${BRAIN_URL}${path}`, {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${env.BRAIN_API_SECRET}`,
+      Authorization: `Bearer ${env.BRAIN_API_SECRET}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify(body)
@@ -158,7 +167,7 @@ async function handleUpdate(update, env) {
 
   const telegramId = String(message.from.id);
 
-  // This is a private test bot for one configured owner.
+  // Only the configured test owner may use this bot.
   if (telegramId !== String(env.TEST_OWNER_TELEGRAM_ID)) return;
 
   const chatId = message.chat.id;
@@ -171,18 +180,17 @@ async function handleUpdate(update, env) {
       env,
       chatId,
       "Hi! This is the private Maya Brain test bot.\n\n" +
-      "Before chatting, choose whether you allow message retention for replies.\n\n" +
-      "• /consent — allow message retention for the test; AI-training consent remains NO.\n" +
-      "• /no — decline or withdraw retention consent and stop using the bot.\n\n" +
-      "History and long-term memory remain disabled by default. " +
-      "This test does not offer a data-deletion command."
+        "Before chatting, choose whether you allow message retention for replies.\n\n" +
+        "• /consent — allow message retention for the test; AI-training consent remains NO.\n" +
+        "• /no — decline or withdraw retention consent and stop using the bot.\n\n" +
+        "History and long-term memory remain disabled by default. " +
+        "This test does not offer a data-deletion command."
     );
     return;
   }
 
   if (command === "/no") {
     try {
-      // Record the user's choice in the Brain database first.
       await callBrain(env, "/onboarding", {
         userId,
         retentionConsent: false,
