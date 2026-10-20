@@ -49,7 +49,10 @@ export default {
 
         return json({ ok: true, webhook: result });
       } catch (error) {
-        console.error("Webhook setup failed:", String(error?.message || "Unknown error"));
+        console.error(
+          "Webhook setup failed:",
+          String(error?.message || "Unknown error")
+        );
         return json({ error: "Unable to configure Telegram webhook" }, 502);
       }
     }
@@ -94,7 +97,6 @@ export default {
         );
       }
 
-      // Prevent Telegram from repeatedly retrying handled updates.
       return json({ ok: true });
     }
 
@@ -141,8 +143,22 @@ async function callBrain(env, path, body) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok || data.ok !== true) {
-    console.error("Brain API failed:", path, "HTTP", response.status);
-    throw new Error(`Brain API request failed: ${response.status}`);
+    const safeError =
+      typeof data.error === "string"
+        ? data.error
+        : typeof data.message === "string"
+          ? data.message
+          : "No error details returned";
+
+    console.error("Brain API request failed:", {
+      path,
+      status: response.status,
+      error: safeError
+    });
+
+    throw new Error(
+      `Brain API request failed: HTTP ${response.status}; ${safeError}`
+    );
   }
 
   return data;
@@ -173,7 +189,7 @@ async function handleUpdate(update, env) {
 
   const telegramId = String(message.from.id);
 
-  // Restrict this test bot to the configured owner.
+  // Only the configured owner may use this test bot.
   if (telegramId !== String(env.TEST_OWNER_TELEGRAM_ID)) {
     console.warn("Ignored message from an unconfigured Telegram user");
     return;
