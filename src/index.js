@@ -14,7 +14,6 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    // Health check
     if (
       request.method === "GET" &&
       (url.pathname === "/" || url.pathname === "/health")
@@ -26,7 +25,6 @@ export default {
       });
     }
 
-    // Configure Telegram webhook
     if (request.method === "POST" && url.pathname === "/setup") {
       if (
         !env.WEBHOOK_SETUP_KEY ||
@@ -64,7 +62,6 @@ export default {
       }
     }
 
-    // Receive Telegram updates
     if (request.method === "POST" && url.pathname === "/telegram") {
       const missing = [];
 
@@ -115,6 +112,7 @@ export default {
         );
       }
 
+      // Telegram must receive a successful acknowledgement.
       return json({ ok: true });
     }
 
@@ -151,9 +149,9 @@ async function sendText(env, chatId, text) {
 }
 
 async function callBrain(env, path, body) {
-  const cleanBase = BRAIN_URL.replace(/\/+$/, "");
+  const base = BRAIN_URL.replace(/\/+$/, "");
   const cleanPath = path.replace(/^\/+/, "");
-  const url = `${cleanBase}/${cleanPath}`;
+  const url = `${base}/${cleanPath}`;
 
   const response = await fetch(url, {
     method: "POST",
@@ -171,11 +169,10 @@ async function callBrain(env, path, body) {
   try {
     data = JSON.parse(raw);
   } catch {
-    // The API may return plain-text or HTML errors.
+    // The API can return plain-text errors.
   }
 
   if (!response.ok || data.ok !== true) {
-    // Do not log request headers or credentials.
     console.error("Brain API request failed:", {
       url,
       status: response.status,
@@ -183,9 +180,7 @@ async function callBrain(env, path, body) {
       responsePreview: raw.slice(0, 300)
     });
 
-    throw new Error(
-      `Brain API request failed: HTTP ${response.status}`
-    );
+    throw new Error(`Brain API request failed: HTTP ${response.status}`);
   }
 
   return data;
@@ -216,7 +211,6 @@ async function handleUpdate(update, env) {
 
   const telegramId = String(message.from.id);
 
-  // Only the configured owner may use this test bot.
   if (telegramId !== String(env.TEST_OWNER_TELEGRAM_ID)) {
     console.warn("Ignored message from an unconfigured Telegram user");
     return;
@@ -232,18 +226,17 @@ async function handleUpdate(update, env) {
       env,
       chatId,
       "Hi! This is the private Maya Brain test bot.\n\n" +
-        "Before chatting, choose whether you allow message retention for replies.\n\n" +
-        "• /consent — allow message retention for the test; AI-training consent remains NO.\n" +
-        "• /no — decline or withdraw retention consent and stop using the bot.\n\n" +
-        "History and long-term memory remain disabled by default. " +
-        "This test does not offer a data-deletion command."
+        "Before chatting, choose whether you allow message retention.\n\n" +
+        "• /consent — allow message retention and conversation history for this test. AI-training consent remains NO.\n" +
+        "• /no — withdraw retention consent and stop using the bot.\n\n" +
+        "Long-term memory remains disabled. Previously stored data is not automatically deleted by /no."
     );
-
     return;
   }
 
   if (command === "/no") {
     try {
+      // Withdraw consent first; this also disables history and memory.
       await callBrain(env, "/onboarding", {
         userId,
         retentionConsent: false,
@@ -255,7 +248,7 @@ async function handleUpdate(update, env) {
       await sendText(
         env,
         chatId,
-        "Retention consent is now disabled. The bot will not process further messages until you consent again. Previously stored data has not been deleted."
+        "Retention consent has been withdrawn. History and long-term memory are disabled. Previously stored messages have not been deleted."
       );
     } catch (error) {
       console.error(
@@ -269,7 +262,6 @@ async function handleUpdate(update, env) {
         "I couldn't update your consent right now. Please try /no again later."
       );
     }
-
     return;
   }
 
@@ -277,16 +269,37 @@ async function handleUpdate(update, env) {
     let stage = "onboarding";
 
     try {
+      // 1. Record explicit consent.
       const result = await callBrain(env, "/onboarding", {
         userId,
         retentionConsent: true,
         trainingConsent: false
       });
 
-      if (!result.conversationId) {
+      if (
+        typeof result.conversationId !== "string" ||
+        !result.conversationId
+      ) {
         throw new Error("Conversation ID missing from Brain response");
       }
 
+      // 2. Enable history only after consent is recorded.
+      stage = "enable_history";
+
+      const historyResult = await callBrain(
+        env,
+        "/settings/history",
+        {
+          userId,
+          enabled: true
+        }
+      );
+
+      if (historyResult.history_enabled !== true) {
+        throw new Error("Conversation history could not be enabled");
+      }
+
+      // 3. Persist test state in KV.
       stage = "kv_write";
 
       await env.TEST_STATE.put(
@@ -297,12 +310,13 @@ async function handleUpdate(update, env) {
         })
       );
 
+      // 4. Confirm to the user.
       stage = "telegram_reply";
 
       await sendText(
         env,
         chatId,
-        "Consent saved. AI-training consent is NO. History and long-term memory are still disabled. You can now send me a message."
+        "Consent saved! Conversation history is enabled, so messages and replies can be saved in the Brain database. AI-training consent is NO, and long-term memory remains disabled. You can now chat with Maya."
       );
     } catch (error) {
       console.error(
@@ -325,7 +339,6 @@ async function handleUpdate(update, env) {
         );
       }
     }
-
     return;
   }
 
@@ -333,9 +346,8 @@ async function handleUpdate(update, env) {
     await sendText(
       env,
       chatId,
-      "Commands:\n/start — show information\n/consent — allow message retention for replies\n/no — withdraw retention consent"
+      "Commands:\n/start — show information\n/consent — enable retention and conversation history\n/no — withdraw retention consent"
     );
-
     return;
   }
 
@@ -345,9 +357,8 @@ async function handleUpdate(update, env) {
     await sendText(
       env,
       chatId,
-      "Please read the information first using /start, then send /consent if you agree."
+      "Please read the information using /start, then send /consent if you agree."
     );
-
     return;
   }
 
