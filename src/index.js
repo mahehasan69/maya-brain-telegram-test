@@ -36,7 +36,10 @@ export default {
       }
 
       if (!env.TELEGRAM_BOT_TOKEN || !env.TELEGRAM_WEBHOOK_SECRET) {
-        return json({ error: "Telegram configuration is incomplete" }, 503);
+        return json(
+          { error: "Telegram configuration is incomplete" },
+          503
+        );
       }
 
       try {
@@ -53,7 +56,11 @@ export default {
           "Webhook setup failed:",
           String(error?.message || "Unknown error")
         );
-        return json({ error: "Unable to configure Telegram webhook" }, 502);
+
+        return json(
+          { error: "Unable to configure Telegram webhook" },
+          502
+        );
       }
     }
 
@@ -62,14 +69,25 @@ export default {
       const missing = [];
 
       if (!env.TELEGRAM_BOT_TOKEN) missing.push("TELEGRAM_BOT_TOKEN");
-      if (!env.TELEGRAM_WEBHOOK_SECRET) missing.push("TELEGRAM_WEBHOOK_SECRET");
+      if (!env.TELEGRAM_WEBHOOK_SECRET) {
+        missing.push("TELEGRAM_WEBHOOK_SECRET");
+      }
       if (!env.BRAIN_API_SECRET) missing.push("BRAIN_API_SECRET");
       if (!env.TEST_STATE) missing.push("TEST_STATE");
-      if (!env.TEST_OWNER_TELEGRAM_ID) missing.push("TEST_OWNER_TELEGRAM_ID");
+      if (!env.TEST_OWNER_TELEGRAM_ID) {
+        missing.push("TEST_OWNER_TELEGRAM_ID");
+      }
 
       if (missing.length) {
-        console.error("Missing Worker configuration:", missing.join(", "));
-        return json({ error: "Worker configuration is incomplete" }, 503);
+        console.error(
+          "Missing Worker configuration:",
+          missing.join(", ")
+        );
+
+        return json(
+          { error: "Worker configuration is incomplete" },
+          503
+        );
       }
 
       if (
@@ -117,7 +135,9 @@ async function telegram(env, method, payload) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok || !data.ok) {
-    throw new Error(`Telegram ${method} failed with HTTP ${response.status}`);
+    throw new Error(
+      `Telegram ${method} failed with HTTP ${response.status}`
+    );
   }
 
   return data.result;
@@ -131,7 +151,11 @@ async function sendText(env, chatId, text) {
 }
 
 async function callBrain(env, path, body) {
-  const response = await fetch(`${BRAIN_URL}${path}`, {
+  const cleanBase = BRAIN_URL.replace(/\/+$/, "");
+  const cleanPath = path.replace(/^\/+/, "");
+  const url = `${cleanBase}/${cleanPath}`;
+
+  const response = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${env.BRAIN_API_SECRET}`,
@@ -140,24 +164,27 @@ async function callBrain(env, path, body) {
     body: JSON.stringify(body)
   });
 
-  const data = await response.json().catch(() => ({}));
+  const raw = await response.text();
+
+  let data = {};
+
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    // The API may return plain-text or HTML errors.
+  }
 
   if (!response.ok || data.ok !== true) {
-    const safeError =
-      typeof data.error === "string"
-        ? data.error
-        : typeof data.message === "string"
-          ? data.message
-          : "No error details returned";
-
+    // Do not log request headers or credentials.
     console.error("Brain API request failed:", {
-      path,
+      url,
       status: response.status,
-      error: safeError
+      contentType: response.headers.get("content-type"),
+      responsePreview: raw.slice(0, 300)
     });
 
     throw new Error(
-      `Brain API request failed: HTTP ${response.status}; ${safeError}`
+      `Brain API request failed: HTTP ${response.status}`
     );
   }
 
@@ -211,6 +238,7 @@ async function handleUpdate(update, env) {
         "History and long-term memory remain disabled by default. " +
         "This test does not offer a data-deletion command."
     );
+
     return;
   }
 
@@ -241,6 +269,7 @@ async function handleUpdate(update, env) {
         "I couldn't update your consent right now. Please try /no again later."
       );
     }
+
     return;
   }
 
@@ -296,6 +325,7 @@ async function handleUpdate(update, env) {
         );
       }
     }
+
     return;
   }
 
@@ -305,6 +335,7 @@ async function handleUpdate(update, env) {
       chatId,
       "Commands:\n/start — show information\n/consent — allow message retention for replies\n/no — withdraw retention consent"
     );
+
     return;
   }
 
@@ -316,6 +347,7 @@ async function handleUpdate(update, env) {
       chatId,
       "Please read the information first using /start, then send /consent if you agree."
     );
+
     return;
   }
 
